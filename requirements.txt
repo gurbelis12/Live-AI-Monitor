@@ -1,0 +1,15 @@
+Python Dependencies for Live AI 3D Printer Monitor
+Install using: pip install -r requirements.txt
+opencv-python
+pyserial
+ultralytics
+torch
+flask
+flask-socketio
+numpy
+Note: pykinect2 must be installed manually.
+It is not available on PyPI.
+Download the wheel file (.whl) matching your Python version
+and Windows architecture (e.g., cp39 for Python 3.9, amd64 for 64-bit)
+from: https://github.com/Kinect/PyKinect2
+Then run: pip install pykinect2-2.0.xxxx.whl

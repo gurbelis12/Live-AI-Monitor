@@ -1,0 +1,312 @@
+<!-- 
+================================================================================
+PROJECT: Live AI 3D Printer Monitor
+FILE: templates/live.html
+PURPOSE: Live web dashboard HTML.
+Based on: SECTION 6: LIVE WEB DASHBOARD STRUCTURE (Completed)
+================================================================================
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LIVE AI Monitor</title>
+    <!-- Import Socket.IO client library -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --text-color: #f0f0f0;
+            --border-color: #444;
+            --green: #00ff00;
+            --red: #ff0000;
+            --blue: #00aaff;
+            --orange: #ff8c00;
+        }
+        body { 
+            margin: 0; 
+            padding: 0;
+            background: var(--bg-color); 
+            color: var(--text-color); 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+        
+        /* Header */
+        header {
+            width: 100%;
+            padding: 10px 20px;
+            background: #222;
+            border-bottom: 2px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-sizing: border-box;
+        }
+        header h1 {
+            margin: 0;
+            font-size: 1.5rem;
+            color: var(--blue);
+            font-weight: 600;
+        }
+        #status {
+            font-size: 1rem;
+            font-weight: 500;
+        }
+        .status-dot {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--red);
+            margin-right: 8px;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.3; }
+            100% { opacity: 1; }
+        }
+        .status-dot.connected {
+            background: var(--green);
+            animation: none;
+        }
+        
+        /* Video Container */
+        .video-container {
+            position: relative;
+            width: 100%;
+            /* 16:9 Aspect Ratio (540 / 960) */
+            padding-top: 56.25%; 
+            background: #000;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        #live_canvas { 
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%; 
+            height: 100%;
+        }
+
+        /* Metrics */
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            padding: 10px 0;
+            width: 100%;
+        }
+        .metric-card {
+            background: #282828;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+        }
+        .metric-card h3 {
+            margin: 0 0 5px 0;
+            font-size: 0.9rem;
+            color: #aaa;
+            text-transform: uppercase;
+        }
+        .metric-card .value {
+            font-size: 1.8rem;
+            font-weight: 600;
+            color: var(--text-color);
+        }
+        .metric-card .value-hotend { color: var(--orange); }
+        .metric-card .value-bed { color: var(--blue); }
+
+        /* Defect Alert */
+        #last_defect {
+            width: 100%;
+            background: var(--red);
+            color: #fff;
+            padding: 15px;
+            font-size: 1.2rem;
+            font-weight: 600;
+            text-align: center;
+            border-radius: 8px;
+            margin-top: 10px;
+            box-sizing: border-box;
+            display: none; /* Hidden by default */
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>LIVE AI Monitor</h1>
+        <div id="status">
+            <span id="status_dot" class="status-dot"></span>
+            <span id="status_text">Connecting...</span>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="metrics">
+            <div class="metric-card">
+                <h3>Hotend Temp</h3>
+                <div class="value value-hotend" id="hotend">-- °C</div>
+            </div>
+            <div class="metric-card">
+                <h3>Bed Temp</h3>
+                <div class="value value-bed" id="bed">-- °C</div>
+            </div>
+            <div class="metric-card">
+                <h3>Current Layer</h3>
+                <div class="value" id="layer">--</div>
+            </div>
+            <div class="metric-card">
+                <h3>Client Ping</h3>
+                <div class="value" id="ping">-- ms</div>
+            </div>
+        </div>
+
+        <div class="video-container">
+            <!-- We use a Canvas to draw the image and bounding boxes -->
+            <canvas id="live_canvas" width="960" height="540"></canvas>
+        </div>
+        
+        <div id="last_defect">
+            <strong>DEFECT DETECTED:</strong> <span id="defect_text"></span>
+        </div>
+    </div>
+
+    <script>
+        // --- Socket.IO Connection ---
+        // Connect to the server.
+        // If your server is not on the same host, replace with:
+        // const socket = io("http://your_server_ip:5000");
+        const socket = io();
+        
+        // --- DOM Elements ---
+        const statusDot = document.getElementById('status_dot');
+        const statusText = document.getElementById('status_text');
+        const hotendEl = document.getElementById('hotend');
+        const bedEl = document.getElementById('bed');
+        const layerEl = document.getElementById('layer');
+        const pingEl = document.getElementById('ping');
+        const defectBanner = document.getElementById('last_defect');
+        const defectText = document.getElementById('defect_text');
+        
+        // --- Canvas Setup ---
+        const canvas = document.getElementById('live_canvas');
+        const ctx = canvas.getContext('2d');
+        const img = new Image();
+        
+        let lastDefect = null;
+
+        // --- Socket Event Handlers ---
+        socket.on('connect', () => {
+            console.log('Socket.IO connected.');
+            statusDot.classList.add('connected');
+            statusText.textContent = 'Connected';
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Socket.IO disconnected.');
+            statusDot.classList.remove('connected');
+            statusText.textContent = 'Disconnected';
+        });
+
+        // Ping calculation
+        let startTime;
+        setInterval(() => {
+            startTime = Date.now();
+            socket.emit('ping');
+        }, 2000);
+
+        socket.on('pong', () => {
+            const latency = Date.now() - startTime;
+            pingEl.textContent = `${latency} ms`;
+        });
+        
+        // Main live frame update
+        socket.on('live_frame', (data) => {
+            // Update image
+            img.onload = () => {
+                // Draw the new frame
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                
+                // Draw bounding box if defect exists
+                if (data.defect) {
+                    drawBoundingBox(data.defect);
+                }
+            };
+            img.src = 'data:image/jpeg;base64,' + data.image;
+
+            // Update metrics
+            const temps = data.temp || {};
+            hotendEl.textContent = `${temps.hotend?.toFixed(1) ?? '--'} °C`;
+            bedEl.textContent = `${temps.bed?.toFixed(1) ?? '--'} °C`;
+            layerEl.textContent = data.layer;
+            
+            // Update defect banner
+            if (data.defect) {
+                const conf = (data.defect.confidence * 100).toFixed(0);
+                defectText.textContent = `${data.defect.type.toUpperCase()} (${conf}%)`;
+                defectBanner.style.display = 'block';
+                lastDefect = data.defect;
+            } else {
+                // Hide banner if defect is gone
+                defectBanner.style.display = 'none';
+                lastDefect = null;
+            }
+        });
+        
+        socket.on('live_status', (data) => {
+            console.log('Status update:', data);
+        });
+
+        // --- Helper Functions ---
+        function drawBoundingBox(defect) {
+            if (!defect || !defect.bbox) return;
+            
+            const [x1, y1, x2, y2] = defect.bbox;
+            const conf = (defect.confidence * 100).toFixed(0);
+            const label = `${defect.type.toUpperCase()} (${conf}%)`;
+            
+            // Scale bbox coordinates from 1920x1080 to canvas size (960x540)
+            const scaleX = canvas.width / 1920; 
+            const scaleY = canvas.height / 1080;
+            
+            const sx1 = x1 * scaleX;
+            const sy1 = y1 * scaleY;
+            const sWidth = (x2 - x1) * scaleX;
+            const sHeight = (y2 - y1) * scaleY;
+
+            // Draw box
+            ctx.strokeStyle = 'red';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(sx1, sy1, sWidth, sHeight);
+            
+            // Draw label background
+            ctx.fillStyle = 'red';
+            ctx.font = 'bold 18px Arial';
+            const textWidth = ctx.measureText(label).width;
+            ctx.fillRect(sx1, sy1 - 22, textWidth + 10, 22);
+            
+            // Draw label text
+            ctx.fillStyle = 'white';
+            ctx.fillText(label, sx1 + 5, sy1 - 5);
+        }
+
+    </script>
+</body>
+</html>
